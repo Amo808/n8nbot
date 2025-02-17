@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 USER_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
 BOT_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/a392f54a-ee58-4fe8-a951-359602f5ec70"
+TEST_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/test-webhook"  # Новый тестовый вебхук
 
 message_store = {}
 timers = {}
@@ -32,6 +33,7 @@ def process_user_messages(sender_id):
         time.sleep(15)
         if sender_id in message_store and message_store[sender_id]:
             send_to_target(message_store.pop(sender_id, []), USER_WEBHOOK)
+            send_to_target(message_store.pop(sender_id, []), TEST_WEBHOOK)  # Отправка на тестовый вебхук
         timers.pop(sender_id, None)
     except Exception as e:
         logger.error(f"Ошибка в обработке сообщений пользователя {sender_id}: {e}")
@@ -56,6 +58,7 @@ def home():
             # Обработка сообщений бота или менеджера
             if sender_id == recipient_id or is_echo:
                 send_to_target([data], BOT_WEBHOOK)
+                send_to_target([data], TEST_WEBHOOK)  # Отправка на тестовый вебхук
             else:
                 logger.info(f"Сообщение от пользователя {sender_id}: {message}")
 
