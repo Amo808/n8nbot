@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 USER_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
 BOT_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/a392f54a-ee58-4fe8-a951-359602f5ec70"
-TEST_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/test-webhook"  # Новый тестовый вебхук
+TEST_WEBHOOK = "https://n8n-e66f.onrender.com/webhook-test/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"  # Новый тестовый вебхук
 
 message_store = {}
 timers = {}
