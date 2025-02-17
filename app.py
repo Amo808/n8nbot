@@ -3,51 +3,38 @@ import requests
 from flask import Flask, request, jsonify
 import threading
 import time
-import os
 
 app = Flask(__name__)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Хранилище сообщений и таймеров
+USER_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/88196809-6ea6-48cc-823d-e970fc9a3fd0"
+BOT_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/88196809-6ea6-48cc-823d-e970fc9a3fd0"
+
 message_store = {}
 timers = {}
 
-# Загружаем вебхуки из переменных окружения
-ACCOUNTS = {
-    # Формат: "account_id": {"user_webhook": "...", "bot_webhook": "..."}
-    os.getenv("ACC_1_ID"): {
-        "user_webhook": os.getenv("ACC_1_USER_WEBHOOK"),
-        "bot_webhook": os.getenv("ACC_1_BOT_WEBHOOK")
-    },
-    os.getenv("ACC_2_ID"): {
-        "user_webhook": os.getenv("ACC_2_USER_WEBHOOK"),
-        "bot_webhook": os.getenv("ACC_2_BOT_WEBHOOK")
-    },
-}
-
 def send_to_target(data, url):
     """Отправка данных на целевой сервер."""
-    if not url:
-        logger.warning("Вебхук не задан.")
-        return
     try:
         response = requests.post(url, json={"messages": data})
         response.raise_for_status()
         logger.info(f"Данные успешно отправлены на {url}.")
     except requests.exceptions.RequestException as e:
         logger.error(f"Ошибка при отправке данных на {url}: {e}")
+        if response is not None:
+            logger.error(f"Ответ сервера: {response.text}")
 
-def process_user_messages(sender_id, user_webhook):
+def process_user_messages(sender_id):
     """Ждет 15 секунд и отправляет накопленные сообщения пользователя."""
     try:
         time.sleep(15)
         if sender_id in message_store and message_store[sender_id]:
-            send_to_target(message_store.pop(sender_id, []), user_webhook)
+            send_to_target(message_store.pop(sender_id, []), USER_WEBHOOK)
         timers.pop(sender_id, None)
     except Exception as e:
-        logger.error(f"Ошибка при обработке сообщений пользователя {sender_id}: {e}")
+        logger.error(f"Ошибка в обработке сообщений пользователя {sender_id}: {e}")
 
 @app.route("/", methods=["POST"])
 def home():
@@ -66,23 +53,16 @@ def home():
             if not sender_id:
                 continue
 
-            # Определяем аккаунт по recipient_id
-            account = ACCOUNTS.get(recipient_id)
-            if not account:
-                logger.warning(f"Аккаунт с ID {recipient_id} не найден.")
-                continue
-
-            user_webhook = account.get("user_webhook")
-            bot_webhook = account.get("bot_webhook")
-
-            # Если сообщение от бота (is_echo) или менеджера
+            # Обработка сообщений бота или менеджера
             if sender_id == recipient_id or is_echo:
-                send_to_target([data], bot_webhook)
+                send_to_target([data], BOT_WEBHOOK)
             else:
-                # Сообщение от пользователя
+                logger.info(f"Сообщение от пользователя {sender_id}: {message}")
+
                 message_store.setdefault(sender_id, []).append(data)
+
                 if sender_id not in timers:
-                    timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id, user_webhook))
+                    timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id,))
                     timers[sender_id].daemon = True
                     timers[sender_id].start()
 
