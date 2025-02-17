@@ -9,8 +9,8 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-USER_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/88196809-6ea6-48cc-823d-e970fc9a3fd0"
-BOT_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/88196809-6ea6-48cc-823d-e970fc9a3fd0"
+USER_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
+BOT_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/a392f54a-ee58-4fe8-a951-359602f5ec70"
 
 message_store = {}
 timers = {}
