@@ -47,27 +47,42 @@ def home():
 
         logger.info(f"Получены данные: {data}")
 
-        for message in data.get("entry", [{}])[0].get("messaging", []):
-            sender_id = message.get("sender", {}).get("id")
-            recipient_id = message.get("recipient", {}).get("id")
-            is_echo = message.get("message", {}).get("is_echo", False)
+        for entry in data.get("entry", []):
+            for change in entry.get("changes", []):
+                # Проверяем, есть ли комментарий
+                if change.get("field") == "comments":
+                    comment_data = change.get("value")
+                    sender_id = comment_data.get("from", {}).get("id")
+                    comment_text = comment_data.get("text")
 
-            if not sender_id:
-                continue
+                    # Логируем информацию о комментарии
+                    logger.info(f"Комментарий от {sender_id}: {comment_text}")
 
-            # Обработка сообщений бота или менеджера
-            if sender_id == recipient_id or is_echo:
-                send_to_target([data], BOT_WEBHOOK)
-                send_to_target([data], TEST_WEBHOOK)  # Отправка на тестовый вебхук
-            else:
-                logger.info(f"Сообщение от пользователя {sender_id}: {message}")
+                    # Отправляем данные о комментарии в нужный вебхук
+                    send_to_target([comment_data], USER_WEBHOOK)
+                    send_to_target([comment_data], TEST_WEBHOOK)  # Если тестируете
 
-                message_store.setdefault(sender_id, []).append(data)
+            for message in entry.get("messaging", []):
+                sender_id = message.get("sender", {}).get("id")
+                recipient_id = message.get("recipient", {}).get("id")
+                is_echo = message.get("message", {}).get("is_echo", False)
 
-                if sender_id not in timers:
-                    timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id,))
-                    timers[sender_id].daemon = True
-                    timers[sender_id].start()
+                if not sender_id:
+                    continue
+
+                # Обработка сообщений бота или менеджера
+                if sender_id == recipient_id or is_echo:
+                    send_to_target([data], BOT_WEBHOOK)
+                    send_to_target([data], TEST_WEBHOOK)  # Отправка на тестовый вебхук
+                else:
+                    logger.info(f"Сообщение от пользователя {sender_id}: {message}")
+
+                    message_store.setdefault(sender_id, []).append(data)
+
+                    if sender_id not in timers:
+                        timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id,))
+                        timers[sender_id].daemon = True
+                        timers[sender_id].start()
 
         return jsonify({"status": "success", "data": data}), 200
     except Exception as e:
