@@ -30,7 +30,7 @@ def send_to_target(data, url):
 def process_user_messages(sender_id):
     """Ждет 15 секунд и отправляет накопленные сообщения пользователя."""
     try:
-        time.sleep(15)
+        time.sleep(60)
         if sender_id in message_store and message_store[sender_id]:
             send_to_target(message_store.pop(sender_id, []), USER_WEBHOOK)
             send_to_target(message_store.pop(sender_id, []), TEST_WEBHOOK)  # Отправка на тестовый вебхук
