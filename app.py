@@ -3,6 +3,7 @@ import requests
 from flask import Flask, request, jsonify
 import threading
 import time
+import json
 
 app = Flask(__name__)
 
@@ -18,7 +19,7 @@ message_store = {}
 timers = {}
 recent_messages = {}  # Кэш для проверки дублей
 
-DUPLICATE_TIMEOUT = 2  # Время, в течение которого дубли игнорируются (в секундах)
+DUPLICATE_TIMEOUT = 5  # Увеличено до 5 секунд
 
 def is_duplicate(sender_id, message_text):
     """Проверяет, является ли сообщение дубликатом."""
@@ -47,7 +48,7 @@ def process_user_messages(sender_id):
         time.sleep(60)
         if sender_id in message_store and message_store[sender_id]:
             send_to_target(message_store.pop(sender_id, []), USER_WEBHOOK)
-            send_to_target(message_store.pop(sender_id, []), TEST_WEBHOOK)  # Отправка на тестовый вебхук
+            send_to_target(message_store.pop(sender_id, []), TEST_WEBHOOK)
         timers.pop(sender_id, None)
     except Exception as e:
         logger.error(f"Ошибка в обработке сообщений пользователя {sender_id}: {e}")
@@ -55,7 +56,16 @@ def process_user_messages(sender_id):
 @app.route("/", methods=["POST"])
 def home():
     try:
-        data = request.get_json()
+        # Проверяем content-type
+        if request.content_type == "application/x-www-form-urlencoded":
+            data = request.form.to_dict()
+            try:
+                data = json.loads(data.get('payload', '{}'))  # Конвертация строки JSON
+            except json.JSONDecodeError:
+                return jsonify({"status": "error", "message": "Invalid JSON in payload"}), 400
+        else:
+            data = request.get_json()
+        
         if not data:
             return jsonify({"status": "error", "message": "Empty or invalid request body"}), 400
 
@@ -67,35 +77,30 @@ def home():
                     comment_data = change.get("value")
                     sender_id = comment_data.get("from", {}).get("id")
                     comment_text = comment_data.get("text")
-
+                    
                     logger.info(f"Комментарий от {sender_id}: {comment_text}")
-
                     send_to_target([comment_data], USER_WEBHOOK)
-                    send_to_target([comment_data], TEST_WEBHOOK)  # Если тестируете
+                    send_to_target([comment_data], TEST_WEBHOOK)
 
             for message in entry.get("messaging", []):
                 sender_id = message.get("sender", {}).get("id")
                 recipient_id = message.get("recipient", {}).get("id")
                 message_text = message.get("message", {}).get("text", "")
                 is_echo = message.get("message", {}).get("is_echo", False)
-
+                
                 if not sender_id:
                     continue
-
-                # Проверяем, не является ли сообщение дубликатом
+                
                 if is_duplicate(sender_id, message_text):
                     logger.info(f"Дубликат сообщения от {sender_id}, игнорируем: {message_text}")
                     continue
 
-                # Обработка сообщений бота или менеджера
                 if sender_id == recipient_id or is_echo:
                     send_to_target([data], BOT_WEBHOOK)
                     send_to_target([data], TEST_WEBHOOK)
                 else:
                     logger.info(f"Сообщение от пользователя {sender_id}: {message}")
-
                     message_store.setdefault(sender_id, []).append(data)
-
                     if sender_id not in timers:
                         timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id,))
                         timers[sender_id].daemon = True
