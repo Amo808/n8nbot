@@ -10,25 +10,28 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-USER_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
-BOT_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/a392f54a-ee58-4fe8-a951-359602f5ec70"
-TEST_WEBHOOK = "https://n8n-e66f.onrender.com/webhook-test/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
-AMO_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
+# Вебхуки
+WEBHOOKS = {
+    "user": "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7",
+    "bot": "https://n8n-e66f.onrender.com/webhook/a392f54a-ee58-4fe8-a951-359602f5ec70",
+    "test": "https://n8n-e66f.onrender.com/webhook-test/d6cbc19f-5140-4791-8fd8-c9cb901c90c7",
+    "amo": "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
+}
 
 message_store = {}
 timers = {}
 recent_messages = {}
-
 DUPLICATE_TIMEOUT = 5  # Таймаут для фильтрации дублей
 
 
 def is_duplicate(sender_id, message_text):
     """Проверяет, является ли сообщение дубликатом."""
     current_time = time.time()
-    if sender_id in recent_messages:
-        last_message, last_time = recent_messages[sender_id]
-        if last_message == message_text and (current_time - last_time) < DUPLICATE_TIMEOUT:
-            return True
+    last_message, last_time = recent_messages.get(sender_id, (None, 0))
+    
+    if last_message == message_text and (current_time - last_time) < DUPLICATE_TIMEOUT:
+        return True
+    
     recent_messages[sender_id] = (message_text, current_time)
     return False
 
@@ -45,81 +48,82 @@ def send_to_target(data, url):
 
 def process_user_messages(sender_id):
     """Ждет 60 секунд и отправляет накопленные сообщения."""
-    try:
-        time.sleep(60)
-        if sender_id in message_store and message_store[sender_id]:
-            send_to_target(message_store.pop(sender_id, []), USER_WEBHOOK)
-            send_to_target(message_store.pop(sender_id, []), TEST_WEBHOOK)
-        timers.pop(sender_id, None)
-    except Exception as e:
-        logger.error(f"Ошибка в обработке сообщений пользователя {sender_id}: {e}")
+    time.sleep(60)
+    if sender_id in message_store and message_store[sender_id]:
+        send_to_target(message_store.pop(sender_id, []), WEBHOOKS["user"])
+        send_to_target(message_store.pop(sender_id, []), WEBHOOKS["test"])
+    timers.pop(sender_id, None)
 
 
-def find_text_fields(data):
-    """Рекурсивно ищет все значения с ключом 'text' в JSON."""
-    texts = []
-
+def extract_text(data):
+    """Извлекает текст сообщения из всех возможных мест."""
     if isinstance(data, dict):
-        for key, value in data.items():
-            if key == "text" and isinstance(value, (str, list)):
-                if isinstance(value, list):
-                    texts.extend(value)
-                else:
-                    texts.append(value)
-            else:
-                texts.extend(find_text_fields(value))
+        if "text" in data:
+            return data["text"]
+        for value in data.values():
+            extracted = extract_text(value)
+            if extracted:
+                return extracted
     elif isinstance(data, list):
         for item in data:
-            texts.extend(find_text_fields(item))
-
-    return texts
+            extracted = extract_text(item)
+            if extracted:
+                return extracted
+    return ""
 
 
 @app.route("/", methods=["POST"])
 def home():
     try:
-        # Обрабатываем разные форматы контента
-        if request.content_type == "application/x-www-form-urlencoded":
-            form_data = request.form.to_dict(flat=False)
-            json_str = json.dumps(form_data)
-            data = json.loads(json_str)
-        else:
-            data = request.get_json()
-
+        data = request.get_json() or json.loads(json.dumps(request.form.to_dict(flat=False)))
         if not data:
             return jsonify({"status": "error", "message": "Empty or invalid request body"}), 400
 
         logger.info(f"Получены данные: {data}")
 
         # Проверяем формат данных AmoCRM
-        if "unsorted[add][0][source_data][source]" in data:
-            send_to_target(data, AMO_WEBHOOK)
-            return jsonify({"status": "success", "message": "AmoCRM data processed"}), 200
+        if isinstance(data, dict) and "unsorted" in data:
+            unsorted_list = data.get("unsorted", [])
+            if unsorted_list and isinstance(unsorted_list[0], dict):
+                source_data = unsorted_list[0].get("source_data", {})
+                if "source" in source_data:
+                    send_to_target(data, WEBHOOKS["amo"])
+                    return jsonify({"status": "success", "message": "AmoCRM data processed"}), 200
 
-        # Ищем все текстовые сообщения в JSON
-        text_messages = find_text_fields(data)
+        for entry in data.get("entry", []):
+            for change in entry.get("changes", []):
+                if change.get("field") == "comments":
+                    comment_data = change.get("value", {})
+                    sender_id = comment_data.get("from", {}).get("id")
+                    logger.info(f"Комментарий от {sender_id}: {comment_data}")
+                    send_to_target([comment_data], WEBHOOKS["user"])
+                    send_to_target([comment_data], WEBHOOKS["test"])
 
-        if not text_messages:
-            logger.info("Текстовые сообщения не найдены, игнорируем запрос.")
-            return jsonify({"status": "ignored", "message": "No text fields found"}), 200
+            for message in entry.get("messaging", []):
+                sender_id = message.get("sender", {}).get("id")
+                recipient_id = message.get("recipient", {}).get("id")
+                is_echo = message.get("message", {}).get("is_echo", False)
+                message_text = extract_text(message)
 
-        sender_id = data.get("entry", [{}])[0].get("messaging", [{}])[0].get("sender", {}).get("id", "unknown")
+                if not sender_id:
+                    continue
 
-        # Фильтрация дубликатов
-        for text in text_messages:
-            if is_duplicate(sender_id, text):
-                logger.info(f"Дубликат сообщения от {sender_id}, игнорируем: {text}")
-                continue
+                if is_duplicate(sender_id, message_text):
+                    logger.info(f"Дубликат сообщения от {sender_id}, игнорируем: {message_text}")
+                    continue
 
-            # Отправка данных
-            message_store.setdefault(sender_id, []).append({"sender_id": sender_id, "text": text})
-            if sender_id not in timers:
-                timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id,))
-                timers[sender_id].daemon = True
-                timers[sender_id].start()
+                if sender_id == recipient_id or is_echo:
+                    send_to_target([data], WEBHOOKS["bot"])
+                    send_to_target([data], WEBHOOKS["test"])
+                else:
+                    logger.info(f"Сообщение от пользователя {sender_id}: {message}")
+                    message_store.setdefault(sender_id, []).append(data)
+                    if sender_id not in timers:
+                        timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id,))
+                        timers[sender_id].daemon = True
+                        timers[sender_id].start()
 
-        return jsonify({"status": "success", "data": text_messages}), 200
-
+        return jsonify({"status": "success", "data": data}), 200
     except Exception as e:
         logger.error(f"Ошибка при обработке данных: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
