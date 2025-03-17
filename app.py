@@ -13,13 +13,13 @@ logger = logging.getLogger(__name__)
 USER_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
 BOT_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/a392f54a-ee58-4fe8-a951-359602f5ec70"
 TEST_WEBHOOK = "https://n8n-e66f.onrender.com/webhook-test/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
-AMO_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"  # Вебхук для первого сообщения из Amo
+AMO_WEBHOOK = "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7"
 
 message_store = {}
 timers = {}
-recent_messages = {}  # Кэш для проверки дублей
+recent_messages = {}
 
-DUPLICATE_TIMEOUT = 5  # Увеличено до 5 секунд
+DUPLICATE_TIMEOUT = 5  # Таймаут для фильтрации дублей
 
 def is_duplicate(sender_id, message_text):
     """Проверяет, является ли сообщение дубликатом."""
@@ -27,8 +27,8 @@ def is_duplicate(sender_id, message_text):
     if sender_id in recent_messages:
         last_message, last_time = recent_messages[sender_id]
         if last_message == message_text and (current_time - last_time) < DUPLICATE_TIMEOUT:
-            return True  # Дубликат найден
-    recent_messages[sender_id] = (message_text, current_time)  # Обновляем кэш
+            return True
+    recent_messages[sender_id] = (message_text, current_time)
     return False
 
 def send_to_target(data, url):
@@ -39,11 +39,9 @@ def send_to_target(data, url):
         logger.info(f"Данные успешно отправлены на {url}.")
     except requests.exceptions.RequestException as e:
         logger.error(f"Ошибка при отправке данных на {url}: {e}")
-        if response is not None:
-            logger.error(f"Ответ сервера: {response.text}")
 
 def process_user_messages(sender_id):
-    """Ждет 15 секунд и отправляет накопленные сообщения пользователя."""
+    """Ждет 60 секунд и отправляет накопленные сообщения."""
     try:
         time.sleep(60)
         if sender_id in message_store and message_store[sender_id]:
@@ -56,21 +54,25 @@ def process_user_messages(sender_id):
 @app.route("/", methods=["POST"])
 def home():
     try:
-        # Проверяем content-type
+        # Обрабатываем разные форматы контента
         if request.content_type == "application/x-www-form-urlencoded":
-            data = request.form.to_dict()
-            try:
-                data = json.loads(data.get('payload', '{}'))  # Конвертация строки JSON
-            except json.JSONDecodeError:
-                return jsonify({"status": "error", "message": "Invalid JSON in payload"}), 400
+            form_data = request.form.to_dict(flat=False)
+            json_str = json.dumps(form_data)
+            data = json.loads(json_str)
         else:
             data = request.get_json()
-        
+
         if not data:
             return jsonify({"status": "error", "message": "Empty or invalid request body"}), 400
 
         logger.info(f"Получены данные: {data}")
 
+        # Проверяем формат данных AmoCRM
+        if "unsorted[add][0][source_data][source]" in data:
+            send_to_target(data, AMO_WEBHOOK)
+            return jsonify({"status": "success", "message": "AmoCRM data processed"}), 200
+
+        # Обработка комментариев
         for entry in data.get("entry", []):
             for change in entry.get("changes", []):
                 if change.get("field") == "comments":
