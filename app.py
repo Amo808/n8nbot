@@ -24,6 +24,7 @@ timers = {}
 recent_messages = {}
 DUPLICATE_TIMEOUT = 5  # Секунды защиты от дубликатов
 
+
 def is_duplicate(sender_id, message_id, message_text):
     """Проверяет, является ли сообщение дубликатом."""
     current_time = time.time()
@@ -39,6 +40,7 @@ def is_duplicate(sender_id, message_id, message_text):
     recent_messages[sender_id] = {"id": message_id, "text": message_text, "time": current_time}
     return False
 
+
 def send_to_target(data, webhook):
     """Отправка данных на целевой сервер."""
     try:
@@ -47,6 +49,7 @@ def send_to_target(data, webhook):
         logger.info(f"✅ Данные отправлены на {webhook}.")
     except requests.RequestException as e:
         logger.error(f"❌ Ошибка отправки данных на {webhook}: {e}")
+
 
 def extract_text(data):
     """Рекурсивный поиск текста в JSON."""
@@ -64,6 +67,7 @@ def extract_text(data):
                 return result
     return None
 
+
 def process_user_messages(sender_id):
     """Отложенная отправка накопленных сообщений."""
     time.sleep(60)
@@ -73,10 +77,12 @@ def process_user_messages(sender_id):
         send_to_target(messages, WEBHOOKS["test"])
     timers.pop(sender_id, None)
 
+
 def handle_amo_crm(data):
     """Обработка данных из AmoCRM."""
     send_to_target(data, WEBHOOKS["amo"])
     return jsonify({"status": "success", "message": "AmoCRM data processed"}), 200
+
 
 def handle_instagram(data):
     """Обработка сообщений из Instagram."""
@@ -86,7 +92,7 @@ def handle_instagram(data):
             sender_id = comment_data.get("from", {}).get("id")
             message_id = comment_data.get("mid")
             message_text = extract_text(comment_data)
-            
+
             if sender_id and message_text and not is_duplicate(sender_id, message_id, message_text):
                 message_store.setdefault(sender_id, []).append(comment_data)
                 if sender_id not in timers:
@@ -96,11 +102,12 @@ def handle_instagram(data):
 
         for message in entry.get("messaging", []):
             sender_id = message.get("sender", {}).get("id")
+            recipient_id = message.get("recipient", {}).get("id")
             message_id = message.get("message", {}).get("mid")
             message_text = extract_text(message)
-            
+
             if sender_id and message_text and not is_duplicate(sender_id, message_id, message_text):
-                if message.get("message", {}).get("is_echo", False):
+                if sender_id == recipient_id or message.get("message", {}).get("is_echo", False):
                     send_to_target([data], WEBHOOKS["bot"])
                     send_to_target([data], WEBHOOKS["test"])
                 else:
@@ -111,26 +118,35 @@ def handle_instagram(data):
                         timers[sender_id].start()
     return jsonify({"status": "success", "data": data}), 200
 
+
 @app.route("/", methods=["POST"])
 def home():
     try:
-        data = request.get_json() if request.content_type == "application/json" else None
+        if request.content_type == "application/json":
+            data = request.get_json()
+        elif request.content_type == "application/x-www-form-urlencoded":
+            data = json.loads(json.dumps(request.form.to_dict(flat=False)))
+        else:
+            return jsonify({"status": "error", "message": f"Unsupported Content-Type: {request.content_type}"}), 415
+
         if not data:
             return jsonify({"status": "error", "message": "Empty or invalid request body"}), 400
-        
+
         logger.info(f"📩 Получены данные: {data}")
-        
+
         if "unsorted[add][0][source_data][source]" in str(data):
             return handle_amo_crm(data)
-        
+
         return handle_instagram(data)
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке данных: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
 @app.route("/", methods=["GET"])
 def get():
     return "Сервер работает! Отправьте POST-запрос на / для тестирования."
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
