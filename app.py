@@ -20,7 +20,7 @@ message_store = {}
 timers = {}
 recent_messages = {}
 DUPLICATE_TIMEOUT = 5  # Защита от дубликатов
-PROCESS_DELAY = 60  # Ожидание перед отправкой
+PROCESS_DELAY = 10  # Ожидание перед отправкой
 
 
 def is_duplicate(sender_id, message_id, message_text):
@@ -57,14 +57,14 @@ def process_messages(sender_id, webhook_key):
 
 def handle_instagram(data):
     for entry in data.get("entry", []):
-        for change in entry.get("changes", []):
-            comment_data = change.get("value", {})
-            sender_id = comment_data.get("from", {}).get("id")
-            message_id = comment_data.get("mid")
-            message_text = comment_data.get("message", {}).get("text", "")
+        for message_event in entry.get("messaging", []):
+            sender_id = message_event.get("sender", {}).get("id")
+            message_id = message_event.get("message", {}).get("mid")
+            message_text = message_event.get("message", {}).get("text", "")
+            is_echo = message_event.get("message", {}).get("is_echo", False)
 
-            if sender_id and message_text and not is_duplicate(sender_id, message_id, message_text):
-                message_store.setdefault(sender_id, []).append(comment_data)
+            if sender_id and message_text and not is_echo and not is_duplicate(sender_id, message_id, message_text):
+                message_store.setdefault(sender_id, []).append({"id": message_id, "text": message_text})
                 if sender_id not in timers:
                     timers[sender_id] = threading.Thread(target=process_messages, args=(sender_id, "user"))
                     timers[sender_id].daemon = True
