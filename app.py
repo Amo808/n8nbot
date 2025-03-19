@@ -23,6 +23,7 @@ message_store = {}
 timers = {}
 recent_messages = {}
 DUPLICATE_TIMEOUT = 5  # Секунды защиты от дубликатов
+PROCESS_DELAY = 60  # Время ожидания перед отправкой сообщений
 
 
 def is_duplicate(sender_id, message_id, message_text):
@@ -68,20 +69,31 @@ def extract_text(data):
     return None
 
 
-def process_user_messages(sender_id):
+def process_user_messages(sender_id, webhook_key):
     """Отложенная отправка накопленных сообщений."""
-    time.sleep(60)
+    time.sleep(PROCESS_DELAY)
     if sender_id in message_store:
         messages = message_store.pop(sender_id, [])
-        send_to_target(messages, WEBHOOKS["user"])
+        send_to_target(messages, WEBHOOKS[webhook_key])
         send_to_target(messages, WEBHOOKS["test"])
     timers.pop(sender_id, None)
 
 
 def handle_amo_crm(data):
-    """Обработка данных из AmoCRM."""
-    send_to_target(data, WEBHOOKS["amo"])
-    return jsonify({"status": "success", "message": "AmoCRM data processed"}), 200
+    """Обработка данных из AmoCRM с задержкой перед отправкой."""
+    sender_id = data.get("unsorted[add][0][source_data][contact][id]", "amo")
+    
+    if sender_id not in message_store:
+        message_store[sender_id] = []
+    
+    message_store[sender_id].append(data)
+    
+    if sender_id not in timers:
+        timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id, "amo"))
+        timers[sender_id].daemon = True
+        timers[sender_id].start()
+    
+    return jsonify({"status": "success", "message": "AmoCRM data received"}), 200
 
 
 def handle_instagram(data):
@@ -96,7 +108,7 @@ def handle_instagram(data):
             if sender_id and message_text and not is_duplicate(sender_id, message_id, message_text):
                 message_store.setdefault(sender_id, []).append(comment_data)
                 if sender_id not in timers:
-                    timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id,))
+                    timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id, "user"))
                     timers[sender_id].daemon = True
                     timers[sender_id].start()
 
@@ -113,7 +125,7 @@ def handle_instagram(data):
                 else:
                     message_store.setdefault(sender_id, []).append(data)
                     if sender_id not in timers:
-                        timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id,))
+                        timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id, "user"))
                         timers[sender_id].daemon = True
                         timers[sender_id].start()
     return jsonify({"status": "success", "data": data}), 200
