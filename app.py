@@ -3,14 +3,13 @@ import requests
 from flask import Flask, request, jsonify
 import threading
 import time
-import json
 
 app = Flask(__name__)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Вебхуки
+# Вебхуки для отправки данных
 WEBHOOKS = {
     "user": "https://n8n-e66f.onrender.com/webhook/d6cbc19f-5140-4791-8fd8-c9cb901c90c7",
     "bot": "https://n8n-e66f.onrender.com/webhook/a392f54a-ee58-4fe8-a951-359602f5ec70",
@@ -22,8 +21,8 @@ WEBHOOKS = {
 message_store = {}
 timers = {}
 recent_messages = {}
-DUPLICATE_TIMEOUT = 5  # Секунды защиты от дубликатов
-PROCESS_DELAY = 60  # Время ожидания перед отправкой сообщений
+DUPLICATE_TIMEOUT = 5  # Защита от дубликатов (секунды)
+PROCESS_DELAY = 60  # Время ожидания перед отправкой (секунды)
 
 
 def is_duplicate(sender_id, message_id, message_text):
@@ -55,7 +54,7 @@ def send_to_target(data, webhook):
 def extract_text(data):
     """Рекурсивный поиск текста в JSON."""
     if isinstance(data, dict):
-        if "text" in data:
+        if "text" in data and isinstance(data["text"], str):
             return data["text"]
         for value in data.values():
             result = extract_text(value)
@@ -79,86 +78,42 @@ def process_user_messages(sender_id, webhook_key):
     timers.pop(sender_id, None)
 
 
-def handle_amo_crm(data):
-    """Обработка данных из AmoCRM с задержкой перед отправкой."""
-    sender_id = data.get("unsorted[add][0][source_data][contact][id]", "amo")
-    
-    if sender_id not in message_store:
-        message_store[sender_id] = []
-    
-    message_store[sender_id].append(data)
-    
-    if sender_id not in timers:
-        timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id, "amo"))
-        timers[sender_id].daemon = True
-        timers[sender_id].start()
-    
-    return jsonify({"status": "success", "message": "AmoCRM data received"}), 200
-
-
-def handle_instagram(data):
-    """Обработка сообщений из Instagram."""
-    for entry in data.get("entry", []):
-        for change in entry.get("changes", []):
-            comment_data = change.get("value", {})
-            sender_id = comment_data.get("from", {}).get("id")
-            message_id = comment_data.get("mid")
-            message_text = extract_text(comment_data)
-
-            if sender_id and message_text and not is_duplicate(sender_id, message_id, message_text):
-                message_store.setdefault(sender_id, []).append(comment_data)
-                if sender_id not in timers:
-                    timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id, "user"))
-                    timers[sender_id].daemon = True
-                    timers[sender_id].start()
-
-        for message in entry.get("messaging", []):
-            sender_id = message.get("sender", {}).get("id")
-            recipient_id = message.get("recipient", {}).get("id")
-            message_id = message.get("message", {}).get("mid")
-            message_text = extract_text(message)
-
-            if sender_id and message_text and not is_duplicate(sender_id, message_id, message_text):
-                if sender_id == recipient_id or message.get("message", {}).get("is_echo", False):
-                    send_to_target([data], WEBHOOKS["bot"])
-                    send_to_target([data], WEBHOOKS["test"])
-                else:
-                    message_store.setdefault(sender_id, []).append(data)
-                    if sender_id not in timers:
-                        timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id, "user"))
-                        timers[sender_id].daemon = True
-                        timers[sender_id].start()
-    return jsonify({"status": "success", "data": data}), 200
-
-
 @app.route("/", methods=["POST"])
-def home():
+def handle_amo_webhook():
+    """Обработка входящих вебхуков от amoCRM."""
     try:
-        if request.content_type == "application/json":
-            data = request.get_json()
-        elif request.content_type == "application/x-www-form-urlencoded":
-            data = json.loads(json.dumps(request.form.to_dict(flat=False)))
-        else:
-            return jsonify({"status": "error", "message": f"Unsupported Content-Type: {request.content_type}"}), 415
-
-        if not data:
-            return jsonify({"status": "error", "message": "Empty or invalid request body"}), 400
-
+        data = request.json
         logger.info(f"📩 Получены данные: {data}")
 
-        if "unsorted[add][0][source_data][source]" in str(data):
-            return handle_amo_crm(data)
+        # Извлекаем UID и текст сообщения
+        sender_id = data.get("unsorted[add][0][source_data][client][id]", [""])[0]
+        message_id = data.get("unsorted[add][0][source_data][data][0][id]", [""])[0]
+        message_text = extract_text(data.get("unsorted[add][0][source_data][data]", []))
 
-        return handle_instagram(data)
+        if not sender_id or not message_text:
+            logger.warning("⚠️ Сообщение без ID или текста, пропускаем...")
+            return jsonify({"status": "ignored"}), 200
+
+        # Проверка на дубликат
+        if is_duplicate(sender_id, message_id, message_text):
+            return jsonify({"status": "duplicate"}), 200
+
+        # Добавляем в хранилище сообщений
+        if sender_id not in message_store:
+            message_store[sender_id] = []
+        message_store[sender_id].append({"id": message_id, "text": message_text})
+
+        # Запускаем таймер для отложенной отправки
+        if sender_id not in timers:
+            timers[sender_id] = threading.Thread(target=process_user_messages, args=(sender_id, "user"))
+            timers[sender_id].start()
+
+        return jsonify({"status": "received"}), 200
+
     except Exception as e:
-        logger.error(f"❌ Ошибка при обработке данных: {e}")
+        logger.error(f"❌ Ошибка обработки вебхука: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/", methods=["GET"])
-def get():
-    return "Сервер работает! Отправьте POST-запрос на / для тестирования."
-
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=5000, debug=True)
