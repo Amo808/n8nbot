@@ -6,6 +6,7 @@ import time
 
 app = Flask(__name__)
 
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,14 @@ WEBHOOKS = {
 message_store = {}
 timers = {}
 recent_messages = {}
-DUPLICATE_TIMEOUT = 5  # Защита от дубликатов (секунды)
-PROCESS_DELAY = 60  # Время ожидания перед отправкой (секунды)
+
+# Константы
+DUPLICATE_TIMEOUT = 5  # Время защиты от дубликатов (секунды)
+PROCESS_DELAY = 60  # Задержка перед отправкой сообщений (секунды)
 
 
 def is_duplicate(sender_id, message_id, message_text):
-    """Проверяет, является ли сообщение дубликатом."""
+    """ Проверяет, является ли сообщение дубликатом """
     current_time = time.time()
     last_message = recent_messages.get(sender_id, {})
 
@@ -42,7 +45,7 @@ def is_duplicate(sender_id, message_id, message_text):
 
 
 def send_to_target(data, webhook):
-    """Отправка данных на целевой сервер."""
+    """ Отправка данных на указанный вебхук """
     try:
         response = requests.post(webhook, json={"messages": data})
         response.raise_for_status()
@@ -52,7 +55,7 @@ def send_to_target(data, webhook):
 
 
 def extract_text(data):
-    """Рекурсивный поиск текста в JSON."""
+    """ Рекурсивный поиск текста в JSON """
     if isinstance(data, dict):
         if "text" in data and isinstance(data["text"], str):
             return data["text"]
@@ -69,7 +72,7 @@ def extract_text(data):
 
 
 def process_user_messages(sender_id, webhook_key):
-    """Отложенная отправка накопленных сообщений."""
+    """ Отложенная отправка накопленных сообщений """
     time.sleep(PROCESS_DELAY)
     if sender_id in message_store:
         messages = message_store.pop(sender_id, [])
@@ -80,7 +83,7 @@ def process_user_messages(sender_id, webhook_key):
 
 @app.route("/", methods=["POST"])
 def handle_amo_webhook():
-    """Обработка входящих вебхуков от amoCRM."""
+    """ Обработка входящих вебхуков от amoCRM """
     try:
         data = request.json
         logger.info(f"📩 Получены данные: {data}")
